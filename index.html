@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>[hidden]{display:none!important}</style>
+<title>Laundry Planner</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=DM+Sans:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* Layout concept: a quiet utility page. "Now" is a grid of machine tiles (live state),
+   "Plan" turns a fixed washer cycle and a stepped dryer time into a minute-accurate timeline,
+   then finds slots with no class and the best odds of a free machine on arrival.
+   Palette: warm neutrals, one blue accent, status colours only for machine state.
+   Two interface languages (English, Simplified Chinese) share one string table in the script. */
+:root {
+  --font-display: "Bricolage Grotesque", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: "DM Sans", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --bg: #f9f9f7;
+  --surface: #fcfcfb;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #6f6d68;
+  --line: #e1e0d9;
+  --line-strong: #c3c2b7;
+  --accent: #1c5cab;
+  --on-accent: #ffffff;
+  --series-1: #2a78d6;
+  --good: #0ca30c;
+  --soon: #eb6834;
+  --off: #898781;
+  --track: #e1e0d9;
+  --hatch: #a5a39b;
+  --focus: #1c5cab;
+  --h0: #cde2fb;
+  --h1: #86b6ef;
+  --h2: #3987e5;
+  --h3: #1c5cab;
+  --h4: #0d366b;
+  --seg-wash: #86b6ef;
+  --seg-dry: #f2a37f;
+  --seg-move: #c3c2b7;
+  --seg-ink: #0b0b0b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #a09e96;
+    --line: #2c2c2a; --line-strong: #383835; --accent: #3987e5; --on-accent: #0b0b0b;
+    --series-1: #3987e5; --track: #2c2c2a; --hatch: #55534e; --focus: #86b6ef;
+    --h0: #222a33; --h1: #184f95; --h2: #256abf; --h3: #3987e5; --h4: #86b6ef;
+    --seg-wash: #3987e5; --seg-dry: #eb6834; --seg-move: #383835;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #a09e96;
+  --line: #2c2c2a; --line-strong: #383835; --accent: #3987e5; --on-accent: #0b0b0b;
+  --series-1: #3987e5; --track: #2c2c2a; --hatch: #55534e; --focus: #86b6ef;
+  --h0: #222a33; --h1: #184f95; --h2: #256abf; --h3: #3987e5; --h4: #86b6ef;
+  --seg-wash: #3987e5; --seg-dry: #eb6834; --seg-move: #383835;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 980px; margin-inline: auto; display: flex; flex-direction: column; gap: 20px; }
+
+/* header, tabs, language switch */
+.top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 24px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: 1.9rem; line-height: 1.15; margin: 0; letter-spacing: -0.01em; text-wrap: balance; }
+.sub { margin: 4px 0 0; color: var(--ink-2); font-size: 0.9rem; }
+.ctrls { display: flex; flex-wrap: wrap; gap: 8px; }
+.tabs { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); }
+.tabs button { border: 0; background: transparent; padding: 7px 18px; border-radius: 7px; font-weight: 500; cursor: pointer; color: var(--ink-2); }
+.tabs button[aria-selected="true"], .tabs button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.tabs.lang button { padding: 7px 12px; }
+
+/* toolbar */
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.field { display: flex; align-items: center; gap: 8px; }
+.field label { color: var(--ink-2); font-size: 0.85rem; }
+select { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 10px; min-height: 36px; }
+.btn { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 12px; min-height: 36px; cursor: pointer; font-weight: 500; }
+.btn:hover { border-color: var(--ink-2); }
+.btn.sq { width: 36px; padding: 0; font-size: 1.15rem; line-height: 1; }
+.btn:disabled, select:disabled { opacity: 0.45; cursor: not-allowed; }
+.stepper { display: inline-flex; align-items: center; gap: 6px; }
+output { min-width: 5.2rem; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+.check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.9rem; }
+.check input { width: 18px; height: 18px; accent-color: var(--accent); }
+.chip { display: inline-flex; align-items: center; gap: 7px; font-size: 0.82rem; font-weight: 500; padding: 4px 10px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface); }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
+.chip.live .dot { background: var(--good); }
+.spacer { flex: 1 1 auto; }
+.stamp { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.notice { margin: 0; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink-2); font-size: 0.88rem; }
+
+/* summary tiles */
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 2px; }
+.tile .k { color: var(--ink-2); font-size: 0.85rem; }
+.tile .v { font-family: var(--font-display); font-weight: 700; font-size: 2.4rem; line-height: 1.05; }
+.tile .v small { font-family: var(--font-body); font-weight: 400; font-size: 0.95rem; color: var(--ink-2); margin-left: 6px; }
+.tile .n { color: var(--ink-2); font-size: 0.88rem; }
+
+/* machine grid */
+h2 { font-family: var(--font-display); font-size: 1.15rem; margin: 0 0 10px; font-weight: 600; }
+.machines { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+.m { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 8px 10px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center; min-width: 0; }
+.m .id { font-weight: 700; font-size: 0.95rem; }
+.m .st { font-weight: 500; font-size: 0.9rem; }
+.m .sb { color: var(--ink-2); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.ring { --p: 50; --c: var(--series-1); width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center;
+  background: conic-gradient(var(--c) calc(var(--p) * 1%), var(--track) 0); }
+.ring span { width: 42px; height: 42px; border-radius: 50%; background: var(--surface); display: grid; place-items: center; font-weight: 700; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.ring.soon { --c: var(--soon); }
+.badge { width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; }
+.badge.free { background: var(--good); color: #fff; }
+.badge.off { border: 2px dashed var(--off); color: var(--ink-2); }
+.badge svg { width: 26px; height: 26px; }
+
+/* plan */
+.panel-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+@media (min-width: 860px) { .panel-grid { grid-template-columns: minmax(0, 340px) minmax(0, 1fr); align-items: start; } }
+.recs { display: grid; gap: 10px; }
+.rec-card { display: flex; align-items: flex-start; gap: 12px; text-align: left; width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; }
+.rec-card[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.rec-card.nowc { cursor: default; }
+.rec-card .rk { flex: none; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--surface); display: grid; place-items: center; font-weight: 700; margin-top: 1px; }
+.rec-card.nowc .rk { width: 36px; height: 36px; font-size: 0.7rem; }
+.rec-body { display: grid; gap: 6px; min-width: 0; flex: 1; }
+.rec-card .t { font-weight: 700; }
+.rec-card .s { color: var(--ink-2); font-size: 0.86rem; }
+.rec-card .l { display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--ink-2); }
+.bar { display: flex; gap: 2px; height: 22px; }
+.seg { display: block; min-width: 0; border-radius: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 6px; font-style: normal; font-size: 0.72rem; font-weight: 700; line-height: 22px; color: var(--seg-ink); }
+.seg.wash { background: var(--seg-wash); }
+.seg.move { background: var(--seg-move); padding: 0; }
+.seg.dry { background: var(--seg-dry); }
+.steps { display: grid; gap: 2px; font-size: 0.86rem; }
+.steps .st b { font-variant-numeric: tabular-nums; margin-right: 8px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
+.empty { padding: 14px; border: 1px dashed var(--line-strong); border-radius: 12px; color: var(--ink-2); }
+.tt { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; display: grid; gap: 10px; min-width: 0; }
+.tt-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.grid { display: grid; grid-template-columns: 2.9rem repeat(7, minmax(0, 1fr)); gap: 2px; }
+.gh { font-size: 0.78rem; font-weight: 700; text-align: center; color: var(--ink-2); padding-bottom: 3px; }
+.gh.today { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+.gl { font-size: 0.74rem; color: var(--muted); text-align: right; padding-right: 6px; align-self: center; font-variant-numeric: tabular-nums; }
+.gl.nowrow { color: var(--ink); font-weight: 700; }
+.cell { position: relative; height: 30px; width: 100%; border: 0; border-radius: 4px; padding: 0; cursor: pointer; display: grid; place-items: center; background: var(--h0); color: var(--ink); font-size: 0.7rem; font-weight: 700; touch-action: manipulation; }
+.cell.l0 { background: var(--h0); } .cell.l1 { background: var(--h1); } .cell.l2 { background: var(--h2); }
+.cell.l3 { background: var(--h3); } .cell.l4 { background: var(--h4); }
+.cell.blk { background-color: var(--surface); background-image: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 7px); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.cell .lbl { display: none; }
+.cell.blk .lbl { display: inline; background: var(--surface); padding: 0 3px; border-radius: 3px; color: var(--ink-2); }
+.cell.past { opacity: 0.45; }
+.cell.rec { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); z-index: 1; }
+.cell .rank { position: absolute; top: 2px; left: 2px; min-width: 16px; height: 16px; border-radius: 8px; background: var(--ink); color: var(--surface); display: grid; place-items: center; font-size: 0.68rem; line-height: 1; padding: 0 3px; }
+@media (max-width: 520px) { .cell { height: 28px; } .cell.blk .lbl { display: none; } }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 0.8rem; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .hatch { background-color: var(--surface); background-image: repeating-linear-gradient(135deg, var(--hatch) 0 2px, transparent 2px 5px); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.legend .ringsw { background: transparent; box-shadow: 0 0 0 2px var(--ink); }
+.fine { color: var(--ink-2); font-size: 0.84rem; margin: 0; }
+#tip { position: fixed; z-index: 20; pointer-events: none; background: var(--ink); color: var(--surface); border-radius: 8px; padding: 7px 10px; font-size: 0.8rem; line-height: 1.35; max-width: 230px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+footer { color: var(--muted); font-size: 0.8rem; }
+footer p { margin: 0 0 4px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1 data-i18n="title">Laundry Planner</h1>
+      <p class="sub" data-i18n="sub"></p>
+    </div>
+    <div class="ctrls">
+      <nav class="tabs" role="tablist" data-i18n-aria="tabsAria">
+        <button role="tab" id="tab-now" aria-controls="panel-now" aria-selected="true" data-i18n="tabNow"></button>
+        <button role="tab" id="tab-plan" aria-controls="panel-plan" aria-selected="false" tabindex="-1" data-i18n="tabPlan"></button>
+      </nav>
+      <div class="tabs lang" role="group" data-i18n-aria="langAria">
+        <button type="button" id="lang-en" lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" lang="zh-Hans" aria-pressed="false">中文</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- NOW -->
+    <section id="panel-now" role="tabpanel" aria-labelledby="tab-now" class="wrap" style="gap:16px">
+      <div class="toolbar">
+        <div class="field"><label for="hall" data-i18n="hallLbl"></label><select id="hall"></select></div>
+        <span id="src" class="chip"><span class="dot"></span><span id="srcText"></span></span>
+        <button id="refresh" class="btn" type="button" data-i18n="refresh"></button>
+        <button id="tryLive" class="btn" type="button" data-i18n="tryLive" hidden></button>
+        <span class="spacer"></span>
+        <span id="stamp" class="stamp"></span>
+      </div>
+      <p id="notice" class="notice" role="status" hidden></p>
+      <div class="summary" id="summary" aria-live="polite"></div>
+      <div>
+        <h2 data-i18n="washers"></h2>
+        <ul class="machines" id="washers"></ul>
+      </div>
+      <div>
+        <h2 data-i18n="dryers"></h2>
+        <ul class="machines" id="dryers"></ul>
+      </div>
+    </section>
+
+    <!-- PLAN -->
+    <section id="panel-plan" role="tabpanel" aria-labelledby="tab-plan" class="wrap" style="gap:14px" hidden>
+      <div class="toolbar">
+        <span class="chip" id="washFixed"></span>
+        <label class="check"><input type="checkbox" id="use-dry" checked><span data-i18n="useDryer"></span></label>
+        <div class="field">
+          <label for="dry-val" data-i18n="dryLbl"></label>
+          <div class="stepper" role="group" data-i18n-aria="dryAria">
+            <button type="button" id="dry-minus" class="btn sq" data-i18n-aria="dryMinus">−</button>
+            <output id="dry-val"></output>
+            <button type="button" id="dry-plus" class="btn sq" data-i18n-aria="dryPlus">+</button>
+          </div>
+        </div>
+        <div class="field"><label for="move" data-i18n="moveLbl"></label><select id="move"></select></div>
+        <span class="chip" id="total"></span>
+      </div>
+      <div class="toolbar">
+        <button id="sample" class="btn" type="button" data-i18n="sample"></button>
+        <button id="clear" class="btn" type="button" data-i18n="clear"></button>
+        <span class="fine" data-i18n="planHint"></span>
+      </div>
+      <div class="panel-grid">
+        <div>
+          <h2 data-i18n="bestTimes"></h2>
+          <div class="recs" id="recs" aria-live="polite"></div>
+          <p class="fine" style="margin-top:12px" data-i18n="bestNote"></p>
+        </div>
+        <div class="tt">
+          <div class="tt-head">
+            <h2 style="margin:0" data-i18n="yourWeek"></h2>
+            <span class="stamp" data-i18n="dragHint"></span>
+          </div>
+          <div class="grid" id="grid" role="group" data-i18n-aria="gridAria"></div>
+          <div class="legend" id="legend"></div>
+          <p class="fine" data-i18n="privacy"></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p data-i18n="footA"></p>
+    <p data-i18n="footB"></p>
+  </footer>
+</div>
+<div id="tip" role="tooltip" hidden></div>
+
+<script>
+(() => {
+  'use strict';
+
+  /* ---------- strings: add a language by adding one more object here ---------- */
+  const STR = {
+    en: {
+      title: 'Laundry Planner',
+      sub: 'Unofficial student prototype for residence hall laundry rooms',
+      tabsAria: 'Views', langAria: 'Language', tabNow: 'Now', tabPlan: 'Plan',
+      hallLbl: 'Hall', hallOpt: 'Hall {n}', refresh: 'Refresh', tryLive: 'Try live data',
+      srcLive: 'Live data', srcDemo: 'Demo data',
+      washers: 'Washers', dryers: 'Dryers',
+      notice: 'Could not reach the live feed from this page ({err}). Showing demo data instead. Open this file in your own browser or deploy it to see real readings.',
+      stamp: 'Updated {t} ago · refreshes every {s} s', secFmt: '{n} s', minFmt: '{n} min',
+      freeOf: 'free of {n}', noteFree: 'Walk in now.', noteNext: 'Next one frees up in about {n} min.', noteNone: 'None available right now.',
+      xInUse: '{n} in use', xNoSignal: '{n} no signal', sp: ' ', end: '.',
+      stFree: 'Free', stBusy: 'In use', stSoon: 'Almost done', stOff: 'No signal',
+      subReady: 'Ready now', subLeft: '{n} min left', subSeen: 'Seen {x}',
+      agoMin: '{n} min ago', agoH: '{n} h ago', agoD: '{n} d ago',
+      fMin: '{n} min', fH: '{n} h', fD: '{n} d',
+      washFixed: 'Washer: {n} min, fixed', useDryer: 'Use dryer', dryLbl: 'Dryer time', dryAria: 'Dryer time',
+      dryMinus: 'Dryer time, 4 minutes less', dryPlus: 'Dryer time, 4 minutes more',
+      moveLbl: 'Moving clothes', total: 'Total {x}',
+      planHint: 'The washer cycle is fixed. The dryer runs in 4 minute steps, from 4 minutes. A slot only counts if you have no class from start to finish.',
+      sample: 'Load sample timetable', clear: 'Clear',
+      bestTimes: 'Best times this week',
+      bestNote: 'Ranked by how likely a machine is to be free when you arrive. Tap a result to see it on the grid.',
+      yourWeek: 'Your week', dragHint: 'Click or drag cells to mark class time',
+      gridAria: 'Weekly timetable and typical laundry room busyness',
+      legendLead: 'Share of machines usually in use:', legendBlk: 'Class or unavailable', legendSel: 'Selected slot',
+      privacy: 'Your timetable stays in this browser. Nothing is uploaded. Busyness shown is a made-up demo pattern (evenings and weekends busier). The real version would compute it from the machine readings logged over several weeks.',
+      lvl0: 'Quiet', lvl1: 'Light', lvl2: 'Moderate', lvl3: 'Busy', lvl4: 'Packed',
+      days: 'Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+      full: 'Monday,Tuesday,Wednesday,Thursday,Friday,Saturday,Sunday',
+      today: 'Today', tomorrow: 'Tomorrow ({day})',
+      recTitle: '{when}, {from} to {to}', startsIn: 'Starts in {x}',
+      segWash: 'Wash {n}', segDry: 'Dry {n}',
+      stepWash: 'Start washer · {n} min', stepMove: 'Move clothes · {n} min', stepDry: 'Start dryer · {n} min', stepDone: 'Done',
+      arriveW: 'Machines in use on arrival: washer about {a}%',
+      arriveWD: 'Machines in use on arrival: washer about {a}%, dryer about {b}%',
+      emptyRecs: 'No {x} free slot in the next 7 days. Clear some class cells or shorten the dryer time.',
+      nowBadge: 'Now', nowTitle: 'If you start now ({time}), Hall {n}',
+      nowWasher: 'Washer free now: {ids}.', nowWasherWait: 'No washer is free now. The next one frees up in about {n} min.',
+      nowWasherNone: 'No washer is available right now.',
+      nowDryer: 'Dryers expected free at {time}: {n} of {m}.', nowDone: 'You would be done by {time}.', nowDemo: 'Based on demo data.',
+      tipRange: '{day} {from} to {to}', tipBlk: 'Marked as class or unavailable', tipLevel: '{lvl}: about {pct}% of machines in use',
+      cellBlk: 'Class or unavailable.', cellLevel: '{lvl}, about {pct} percent of machines in use.',
+      cellAria: '{day} {time}. {desc} Press to toggle.',
+      footA: 'Personal prototype. Not affiliated with the university.',
+      footB: 'Status feed fields used: machine type, machine id, status, minutes left, last update.'
+    },
+    zh: {
+      title: '洗衣规划',
+      sub: '非官方的学生原型，面向宿舍洗衣房',
+      tabsAria: '视图', langAria: '语言', tabNow: '当前', tabPlan: '规划',
+      hallLbl: '宿舍', hallOpt: '{n} 座', refresh: '刷新', tryLive: '尝试实时数据',
+      srcLive: '实时数据', srcDemo: '演示数据',
+      washers: '洗衣机', dryers: '烘干机',
+      notice: '无法从此页面连接实时数据源（{err}），已改为显示演示数据。请下载文件，在自己的浏览器里打开，或部署到网页上，才能看到真实读数。',
+      stamp: '{t}前更新 · 每 {s} 秒刷新', secFmt: '{n} 秒', minFmt: '{n} 分钟',
+      freeOf: '台空闲，共 {n} 台', noteFree: '现在就能用。', noteNext: '约 {n} 分钟后有空位。', noteNone: '现在没有可用的。',
+      xInUse: '{n} 台使用中', xNoSignal: '{n} 台无信号', sp: '', end: '。',
+      stFree: '空闲', stBusy: '使用中', stSoon: '快结束', stOff: '无信号',
+      subReady: '可立即使用', subLeft: '剩 {n} 分钟', subSeen: '{x}上报',
+      agoMin: '{n} 分钟前', agoH: '{n} 小时前', agoD: '{n} 天前',
+      fMin: '{n} 分钟', fH: '{n} 小时', fD: '{n} 天',
+      washFixed: '洗衣机：固定 {n} 分钟', useDryer: '使用烘干机', dryLbl: '烘干时间', dryAria: '烘干时间',
+      dryMinus: '烘干时间减少 4 分钟', dryPlus: '烘干时间增加 4 分钟',
+      moveLbl: '换机时间', total: '全程 {x}',
+      planHint: '洗衣机时长固定。烘干机以 4 分钟为一档，最少 4 分钟。只有从开始到结束都没课的时段才会被推荐。',
+      sample: '载入示例课表', clear: '清空',
+      bestTimes: '本周最佳时段',
+      bestNote: '按你到达时有空机器的可能性排序。点击某一项，可在右侧表格里查看。',
+      yourWeek: '你的一周', dragHint: '点击或拖动格子，标记上课时间',
+      gridAria: '每周课表与洗衣房通常的繁忙程度',
+      legendLead: '通常在使用的机器比例：', legendBlk: '有课或没空', legendSel: '当前选中的时段',
+      privacy: '你的课表只保存在本浏览器里，不会上传。图中的繁忙度是演示用的模拟规律（晚上和周末更忙）。正式版本会根据几周内记录下来的机器读数计算。',
+      lvl0: '很空', lvl1: '较空', lvl2: '一般', lvl3: '较忙', lvl4: '爆满',
+      days: '周一,周二,周三,周四,周五,周六,周日',
+      full: '星期一,星期二,星期三,星期四,星期五,星期六,星期日',
+      today: '今天', tomorrow: '明天（{day}）',
+      recTitle: '{when} {from} 至 {to}', startsIn: '{x}后开始',
+      segWash: '洗 {n}', segDry: '烘 {n}',
+      stepWash: '启动洗衣机 · {n} 分钟', stepMove: '转移衣物 · {n} 分钟', stepDry: '启动烘干机 · {n} 分钟', stepDone: '完成',
+      arriveW: '到达时使用中的机器：洗衣机约 {a}%',
+      arriveWD: '到达时使用中的机器：洗衣机约 {a}%，烘干机约 {b}%',
+      emptyRecs: '未来 7 天里没有连续 {x} 的空档。请清掉一些有课的格子，或缩短烘干时间。',
+      nowBadge: '现在', nowTitle: '现在开始（{time}），{n} 座',
+      nowWasher: '现在有空的洗衣机：{ids}。', nowWasherWait: '现在没有空的洗衣机，约 {n} 分钟后有空位。',
+      nowWasherNone: '现在没有可用的洗衣机。',
+      nowDryer: '{time} 时预计有空的烘干机：{n} 台（共 {m} 台）。', nowDone: '预计 {time} 完成。', nowDemo: '基于演示数据。',
+      tipRange: '{day} {from} 至 {to}', tipBlk: '已标记为有课或没空', tipLevel: '{lvl}：约 {pct}% 的机器在使用',
+      cellBlk: '有课或没空。', cellLevel: '{lvl}，约 {pct}% 的机器在使用。',
+      cellAria: '{day} {time}。{desc}按下可切换。',
+      footA: '个人原型项目，与学校没有隶属关系。',
+      footB: '用到的数据字段：机器类型、编号、状态、剩余分钟、最后更新时间。'
+    }
+  };
+  const LANG_KEY = 'laundry-planner.lang';
+  function detectLang() {
+    try { const v = localStorage.getItem(LANG_KEY); if (v === 'en' || v === 'zh') return v; } catch (e) { /* storage unavailable */ }
+    return /^zh/i.test(navigator.language || '') ? 'zh' : 'en';
+  }
+  let lang = detectLang();
+  function t(key, vars) {
+    let s = (STR[lang] && STR[lang][key]);
+    if (s == null) s = STR.en[key];
+    if (s == null) s = key;
+    if (vars) for (const [k, v] of Object.entries(vars)) s = s.split('{' + k + '}').join(v);
+    return s;
+  }
+  const list = key => t(key).split(',');
+
+  /* ---------- constants ---------- */
+  const TZ = 'Asia/Hong_Kong';
+  const DAYS_EN = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];   // only used to read the weekday back from Intl
+  const HOUR_FIRST = 8, HOUR_END = 24;           // grid rows 08:00 to 24:00
+  const DAY_START = HOUR_FIRST * 60, DAY_END = HOUR_END * 60;
+  const WASH_MIN = 38;                           // the washer cycle is fixed
+  const DRY_STEP = 4, DRY_MIN = 4, DRY_MAX = 120;  // the dryer runs in 4 minute steps, from 4 minutes
+  const MOVE_CHOICES = [0, 5, 10];               // minutes to carry clothes from washer to dryer
+  const START_STEP = 5;                          // candidate start times, every 5 minutes
+  const HALLS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17];
+  const REFRESH_MS = 20000;                      // polite polling; paused while the tab is hidden
+  const STALE_MIN = 30;                          // no report for this long = "No signal" (tune with logged data)
+  const RING_SCALE_MIN = 60;                     // ring is drawn against a 60 minute scale
+  const SOON_MIN = 5;
+  const LEVEL_MAX = [0.2, 0.4, 0.6, 0.8, 1.01];
+  const api = n => 'https://misc.cityu-sro.hk/WMStatus/WMStatus.aspx?HallNo=' + String(n).padStart(2, '0');
+
+  /* ---------- helpers ---------- */
+  const $ = s => document.querySelector(s);
+  const pad = n => String(n).padStart(2, '0');
+  function el(tag, attrs = {}, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v === false || v == null) continue;
+      if (k === 'class') e.className = v;
+      else if (k === 'text') e.textContent = v;
+      else e.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(kid));
+    return e;
+  }
+  const ICON_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  const ICON_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/></svg>';
+  const icon = (svg, cls) => { const s = el('span', { class: cls }); s.innerHTML = svg; return s; };
+
+  const dtf = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, weekday: 'short', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' });
+  function hkNow(tm = Date.now()) {
+    const p = Object.fromEntries(dtf.formatToParts(new Date(tm)).map(x => [x.type, x.value]));
+    let d = DAYS_EN.indexOf(p.weekday);
+    if (d < 0) d = (new Date(tm).getDay() + 6) % 7;
+    return { d, h: +p.hour, m: +p.minute };
+  }
+  // minutes since midnight to "HH:MM"; 1440 reads "24:00", anything later is marked as the next day
+  const clock = min => min === 1440 ? '24:00' : pad(Math.floor(min / 60) % 24) + ':' + pad(min % 60) + (min > 1440 ? ' (+1)' : '');
+  const ago = min => min < 60 ? t('agoMin', { n: Math.max(1, Math.round(min)) }) : min < 1440 ? t('agoH', { n: Math.round(min / 60) }) : t('agoD', { n: Math.floor(min / 1440) });
+  const inText = min => {
+    if (min < 60) return t('fMin', { n: min });
+    const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), m = min % 60;
+    if (d) return t('fD', { n: d }) + (h ? ' ' + t('fH', { n: h }) : '');
+    return t('fH', { n: h }) + (m ? ' ' + t('fMin', { n: m }) : '');
+  };
+  const levelName = i => t('lvl' + i);
+
+  /* ---------- typical busyness model (demo) ---------- */
+  const gauss = (x, mu, s) => Math.exp(-((x - mu) ** 2) / (2 * s * s));
+  // x is the hour of day as a decimal, e.g. 14.5 is 14:30
+  function busyAt(d, x) {
+    const weekday = d < 5;
+    let v = weekday ? 0.08 + 0.72 * gauss(x, 21, 2.1) + 0.2 * gauss(x, 12.5, 1.2)
+                    : 0.12 + 0.55 * gauss(x, 15, 3.2) + 0.5 * gauss(x, 21, 2);
+    if (d === 6) v += 0.12 * gauss(x, 19, 3);
+    if (d === 4) v -= 0.1 * gauss(x, 21, 2);
+    v *= 0.6 + 0.4 * Math.min(1, Math.max(0, (x - 8.5) / 1.5));   // quieter right after opening
+    return Math.max(0.02, Math.min(0.95, v));
+  }
+  const typicalBusy = (d, h) => busyAt(d, h + 0.5);
+  const levelOf = v => LEVEL_MAX.findIndex(m => v < m);
+
+  /* ---------- machines: parse + demo feed ---------- */
+  function parseTime(s) {
+    if (!s) return null;
+    // the feed sends nanosecond precision; trim to milliseconds so every browser parses it
+    const tm = Date.parse(String(s).replace(/(\.\d{3})\d+/, '$1'));
+    return Number.isNaN(tm) ? null : tm;
+  }
+  function parseMachine(raw, now) {
+    const type = raw['Machine Type'] === 'W' ? 'washer' : 'dryer';
+    const id = parseInt(raw['Machine ID'], 10);
+    const left = Number(raw['Left Time']);
+    const updated = parseTime(raw['Last Update']);
+    const ageMin = updated == null ? Infinity : (now - updated) / 60000;
+    let state;
+    if (raw['Status'] === 'U' || left >= 999 || ageMin > STALE_MIN) state = 'offline';
+    else if (left > 0) state = left <= SOON_MIN ? 'soon' : 'busy';
+    else state = 'free';
+    return { type, id, left, ageMin, state };
+  }
+  function hash(...parts) {
+    let h = 2166136261;
+    for (const p of parts) {
+      const n = typeof p === 'number' ? p : String(p).split('').reduce((s, c) => (s * 31 + c.charCodeAt(0)) | 0, 7);
+      h ^= n; h = Math.imul(h, 16777619);
+    }
+    h ^= h >>> 13; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  function demoData(hall, tm = Date.now()) {
+    const { d, h } = hkNow(tm);
+    const b = Math.min(0.95, typicalBusy(d, h) * 1.15);
+    const out = [];
+    for (const type of ['W', 'D']) {
+      const cycle = type === 'W' ? WASH_MIN : 55;
+      const count = type === 'W' ? 6 + (hall % 3) : 4 + (hall % 2);
+      for (let id = 1; id <= count; id++) {
+        const key = hall * 100 + id * 2 + (type === 'W' ? 0 : 1);
+        const tMin = tm / 60000 + hash(key, 'phase') * cycle;
+        const slot = Math.floor(tMin / cycle);
+        const inUse = hash(key, slot) < b;
+        const left = inUse ? Math.max(1, Math.ceil(cycle - (tMin % cycle))) : 0;
+        const dead = type === 'W' && id === 2;     // mirrors the real feed: one machine silent for days
+        out.push({
+          'Machine Type': type,
+          'Machine ID': pad(id),
+          'Status': dead ? 'U' : 'A',
+          'Left Time': String(dead ? 999 : left).padStart(3, '0'),
+          'Last Update': new Date(dead ? tm - 4 * 864e5 : tm - hash(key, 'age', Math.floor(tm / 20000)) * 50000).toISOString()
+        });
+      }
+    }
+    return out;
+  }
+
+  /* ---------- state ---------- */
+  const S = {
+    hall: 16, source: 'live', raw: [], fetchedAt: 0, req: 0, noticeErr: null,
+    tab: 'now', sel: 0, recs: [], blocked: new Set(), lastMinute: -1,
+    useDryer: true, dryMin: 40, moveMin: 5
+  };
+  const STORE_KEY = 'laundry-planner.timetable';
+  const PREFS_KEY = 'laundry-planner.prefs';
+  function loadTimetable() {
+    try {
+      const v = JSON.parse(localStorage.getItem(STORE_KEY));
+      if (Array.isArray(v)) return new Set(v);
+    } catch (e) { /* storage unavailable */ }
+    return null;
+  }
+  function saveTimetable() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify([...S.blocked])); } catch (e) { /* ignore */ }
+  }
+  function loadPrefs() {
+    try {
+      const v = JSON.parse(localStorage.getItem(PREFS_KEY));
+      if (!v) return;
+      if (Number.isInteger(v.dryMin) && v.dryMin >= DRY_MIN && v.dryMin <= DRY_MAX && v.dryMin % DRY_STEP === 0) S.dryMin = v.dryMin;
+      if (typeof v.useDryer === 'boolean') S.useDryer = v.useDryer;
+      if (MOVE_CHOICES.includes(v.moveMin)) S.moveMin = v.moveMin;
+    } catch (e) { /* storage unavailable */ }
+  }
+  function savePrefs() {
+    try { localStorage.setItem(PREFS_KEY, JSON.stringify({ dryMin: S.dryMin, useDryer: S.useDryer, moveMin: S.moveMin })); } catch (e) { /* ignore */ }
+  }
+  function sampleTimetable() {
+    const slots = {
+      0: [9, 10, 11, 14, 15], 1: [11, 12, 16, 17], 2: [9, 10, 14, 15, 16],
+      3: [11, 12, 15, 16], 4: [9, 10, 11], 5: [], 6: []
+    };
+    const s = new Set();
+    for (const [d, hs] of Object.entries(slots)) for (const h of hs) s.add(d + '-' + h);
+    return s;
+  }
+
+  /* ---------- NOW tab ---------- */
+  async function load() {
+    const my = ++S.req;                            // ignore slow replies for a previously selected hall
+    if (S.source === 'live') {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      try {
+        const res = await fetch(api(S.hall), { signal: ctrl.signal, cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        if (!Array.isArray(data)) throw new Error('unexpected format');
+        if (my !== S.req) return;
+        S.raw = data; S.fetchedAt = Date.now(); S.noticeErr = null;
+      } catch (err) {
+        if (my !== S.req) return;
+        S.source = 'demo';
+        S.raw = demoData(S.hall); S.fetchedAt = Date.now();
+        S.noticeErr = (err && err.message) ? err.message : 'blocked';
+      } finally { clearTimeout(timer); }
+    } else {
+      S.raw = demoData(S.hall); S.fetchedAt = Date.now();
+    }
+    renderNow();
+  }
+
+  function summarise(items, type) {
+    const all = items.filter(x => x.type === type);
+    const free = all.filter(x => x.state === 'free').length;
+    const off = all.filter(x => x.state === 'offline').length;
+    const running = all.filter(x => x.state === 'busy' || x.state === 'soon');
+    const next = running.length ? Math.min(...running.map(x => x.left)) : null;
+    return { n: all.length, free, off, inUse: all.length - free - off, next };
+  }
+  function tile(label, s) {
+    let note;
+    if (s.free > 0) note = t('noteFree');
+    else if (s.next != null) note = t('noteNext', { n: s.next });
+    else note = t('noteNone');
+    const extra = [s.inUse ? t('xInUse', { n: s.inUse }) : '', s.off ? t('xNoSignal', { n: s.off }) : ''].filter(Boolean).join(' · ');
+    return el('div', { class: 'tile' },
+      el('div', { class: 'k', text: label }),
+      el('div', { class: 'v' }, String(s.free), el('small', { text: t('freeOf', { n: s.n }) })),
+      el('div', { class: 'n', text: note + (extra ? t('sp') + extra + t('end') : '') }));
+  }
+  function machineCard(m) {
+    const name = (m.type === 'washer' ? 'W' : 'D') + m.id;
+    const label = t({ free: 'stFree', busy: 'stBusy', soon: 'stSoon', offline: 'stOff' }[m.state]);
+    const sub = m.state === 'free' ? t('subReady') : m.state === 'offline' ? t('subSeen', { x: ago(m.ageMin) }) : t('subLeft', { n: m.left });
+    let visual;
+    if (m.state === 'free') visual = icon(ICON_CHECK, 'badge free');
+    else if (m.state === 'offline') visual = icon(ICON_OFF, 'badge off');
+    else {
+      const p = Math.max(4, Math.min(100, m.left / RING_SCALE_MIN * 100));
+      visual = el('div', { class: 'ring' + (m.state === 'soon' ? ' soon' : ''), style: '--p:' + p.toFixed(1) }, el('span', { text: String(m.left) }));
+    }
+    return el('li', { class: 'm' }, el('div', { class: 'id', text: name }), visual, el('div', { class: 'st', text: label }), el('div', { class: 'sb', text: sub }));
+  }
+  function renderNow() {
+    const now = Date.now();
+    const items = S.raw.map(r => parseMachine(r, now)).sort((a, b) => a.id - b.id);
+    $('#summary').replaceChildren(tile(t('washers'), summarise(items, 'washer')), tile(t('dryers'), summarise(items, 'dryer')));
+    $('#washers').replaceChildren(...items.filter(m => m.type === 'washer').map(machineCard));
+    $('#dryers').replaceChildren(...items.filter(m => m.type === 'dryer').map(machineCard));
+    const live = S.source === 'live';
+    $('#src').classList.toggle('live', live);
+    $('#srcText').textContent = t(live ? 'srcLive' : 'srcDemo');
+    $('#tryLive').hidden = live;
+    const n = $('#notice');
+    n.hidden = S.noticeErr === null;
+    n.textContent = S.noticeErr === null ? '' : t('notice', { err: S.noticeErr });
+    renderStamp();
+    if (S.tab === 'plan') renderRecs();            // the "start now" card depends on the latest readings
+  }
+  function renderStamp() {
+    if (!S.fetchedAt) return;
+    const sec = Math.max(0, Math.round((Date.now() - S.fetchedAt) / 1000));
+    const when = sec < 60 ? t('secFmt', { n: sec }) : t('minFmt', { n: Math.round(sec / 60) });
+    $('#stamp').textContent = t('stamp', { t: when, s: REFRESH_MS / 1000 });
+  }
+
+  /* ---------- PLAN tab ---------- */
+  // Minutes from washer start: when the dryer starts, and when everything is finished.
+  function shapeOf(o) {
+    const dryStart = WASH_MIN + o.moveMin;
+    return { dryStart, end: o.useDryer ? dryStart + o.dryMin : WASH_MIN };
+  }
+  // Candidate start times every START_STEP minutes in the next 7 days. A slot is allowed only if no
+  // hour it touches is marked as class. Score = how busy the machines usually are at the moments
+  // you need one: the washer at its start, and the dryer at its start.
+  function recommend(now, o, blocked) {
+    const sh = shapeOf(o);
+    const nowMin = now.h * 60 + now.m;
+    const found = [];
+    for (let off = 0; off < 7; off++) {
+      const d = (now.d + off) % 7;
+      for (let s = DAY_START; s + sh.end <= DAY_END; s += START_STEP) {
+        if (off === 0 && s <= nowMin) continue;
+        let ok = true;
+        for (let h = Math.floor(s / 60); h <= Math.floor((s + sh.end - 1) / 60); h++) {
+          if (blocked.has(d + '-' + h)) { ok = false; break; }
+        }
+        if (!ok) continue;
+        const bw = busyAt(d, s / 60);
+        const bd = o.useDryer ? busyAt(d, (s + sh.dryStart) / 60) : null;
+        found.push({ off, d, start: s, end: s + sh.end, sh, bw, bd, score: bd == null ? bw : (bw + bd) / 2 });
+      }
+    }
+    found.sort((a, b) => a.score - b.score || a.off - b.off || a.start - b.start);
+    const picked = [];
+    for (const c of found) {
+      if (picked.some(p => p.off === c.off && c.start < p.end && p.start < c.end)) continue;
+      picked.push(c);
+      if (picked.length === 3) break;
+    }
+    return picked;
+  }
+
+  let cells = [];
+  function buildGrid() {
+    const grid = $('#grid');
+    const short = list('days');
+    const nodes = [el('div')];
+    short.forEach((d, i) => nodes.push(el('div', { class: 'gh', 'data-d': i, text: d })));
+    cells = [];
+    for (let h = HOUR_FIRST; h < HOUR_END; h++) {
+      nodes.push(el('div', { class: 'gl', 'data-h': h, text: pad(h) + ':00' }));
+      for (let d = 0; d < 7; d++) {
+        const c = el('button', { class: 'cell', type: 'button', 'data-k': d + '-' + h, 'data-d': d, 'data-h': h }, el('span', { class: 'lbl', text: lang === 'zh' ? '有课' : 'Class' }), el('span', { class: 'rank', hidden: '' }));
+        cells.push(c); nodes.push(c);
+      }
+    }
+    grid.replaceChildren(...nodes);
+
+    const items = LEVEL_MAX.map((_, i) => el('span', {}, el('i', { class: 'sw', style: 'background:var(--h' + i + ')' }), levelName(i)));
+    items.push(el('span', {}, el('i', { class: 'sw hatch' }), t('legendBlk')));
+    items.push(el('span', {}, el('i', { class: 'sw ringsw' }), t('legendSel')));
+    $('#legend').replaceChildren(el('span', { text: t('legendLead') }), ...items);
+  }
+
+  function paintGrid() {
+    const now = hkNow();
+    const sel = S.recs[S.sel];
+    const full = list('full');
+    const firstH = sel ? Math.floor(sel.start / 60) : -1, lastH = sel ? Math.floor((sel.end - 1) / 60) : -1;
+    for (const c of cells) {
+      const d = +c.dataset.d, h = +c.dataset.h, k = d + '-' + h;
+      const blocked = S.blocked.has(k);
+      const v = typicalBusy(d, h);
+      const lvl = levelOf(v);
+      const inWin = !!sel && sel.d === d && h >= firstH && h <= lastH;
+      const past = d === now.d && h <= now.h;
+      c.className = 'cell ' + (blocked ? 'blk' : 'l' + lvl) + (inWin ? ' rec' : '') + (past ? ' past' : '');
+      c.setAttribute('aria-pressed', blocked ? 'true' : 'false');
+      const desc = blocked ? t('cellBlk') : t('cellLevel', { lvl: levelName(lvl), pct: Math.round(v * 100) });
+      c.setAttribute('aria-label', t('cellAria', { day: full[d], time: pad(h) + ':00', desc }));
+      const rank = c.querySelector('.rank');
+      const showRank = inWin && h === firstH;
+      rank.hidden = !showRank;
+      rank.textContent = showRank ? String(S.sel + 1) : '';
+    }
+    document.querySelectorAll('.gh').forEach(g => g.classList.toggle('today', +g.dataset.d === now.d));
+    document.querySelectorAll('.gl').forEach(g => g.classList.toggle('nowrow', +g.dataset.h === now.h));
+  }
+
+  function bar() {
+    const segs = [el('i', { class: 'seg wash', style: 'flex:' + WASH_MIN, text: t('segWash', { n: WASH_MIN }) })];
+    if (S.useDryer) {
+      if (S.moveMin > 0) segs.push(el('i', { class: 'seg move', style: 'flex:' + S.moveMin }));
+      segs.push(el('i', { class: 'seg dry', style: 'flex:' + S.dryMin, text: t('segDry', { n: S.dryMin }) }));
+    }
+    return el('span', { class: 'bar', 'aria-hidden': 'true' }, segs);
+  }
+  function steps(start) {
+    const sh = shapeOf(S);
+    const rows = [[start, t('stepWash', { n: WASH_MIN })]];
+    if (S.useDryer) {
+      if (S.moveMin > 0) rows.push([start + WASH_MIN, t('stepMove', { n: S.moveMin })]);
+      rows.push([start + sh.dryStart, t('stepDry', { n: S.dryMin })]);
+    }
+    rows.push([start + sh.end, t('stepDone')]);
+    return el('span', { class: 'steps' }, rows.map(([m, text]) => el('span', { class: 'st' }, el('b', { text: clock(m) }), text)));
+  }
+  // What happens if you walk in right now, using the latest machine readings for the selected hall.
+  function nowCard() {
+    if (!S.raw.length) return null;
+    const now = Date.now(), hk = hkNow(), nowMin = hk.h * 60 + hk.m, sh = shapeOf(S);
+    const items = S.raw.map(r => parseMachine(r, now));
+    const washers = items.filter(m => m.type === 'washer');
+    const dryers = items.filter(m => m.type === 'dryer');
+    const freeW = washers.filter(m => m.state === 'free');
+    const lines = [];
+    let startAt = null;
+    if (freeW.length) { startAt = nowMin; lines.push(t('nowWasher', { ids: freeW.map(m => 'W' + m.id).join(', ') })); }
+    else {
+      const running = washers.filter(m => m.state === 'busy' || m.state === 'soon');
+      if (running.length) { const wait = Math.min(...running.map(m => m.left)); startAt = nowMin + wait; lines.push(t('nowWasherWait', { n: wait })); }
+      else lines.push(t('nowWasherNone'));
+    }
+    if (startAt != null) {
+      if (S.useDryer) {
+        const dryAt = startAt + sh.dryStart, delta = dryAt - nowMin;
+        const ready = dryers.filter(m => m.state === 'free' || ((m.state === 'busy' || m.state === 'soon') && m.left <= delta)).length;
+        lines.push(t('nowDryer', { time: clock(dryAt), n: ready, m: dryers.filter(m => m.state !== 'offline').length }));
+      }
+      lines.push(t('nowDone', { time: clock(startAt + sh.end) }));
+    }
+    if (S.source === 'demo') lines.push(t('nowDemo'));
+    return el('div', { class: 'rec-card nowc' },
+      el('span', { class: 'rk', text: t('nowBadge') }),
+      el('span', { class: 'rec-body' },
+        el('span', { class: 't', text: t('nowTitle', { time: clock(nowMin), n: S.hall }) }),
+        lines.map(l => el('span', { class: 's', text: l }))));
+  }
+
+  function renderRecs() {
+    const now = hkNow();
+    const sh = shapeOf(S);
+    // controls reflect the state
+    $('#washFixed').textContent = t('washFixed', { n: WASH_MIN });
+    $('#total').textContent = t('total', { x: inText(sh.end) });
+    $('#dry-val').textContent = t('fMin', { n: S.dryMin });
+    $('#use-dry').checked = S.useDryer;
+    $('#dry-minus').disabled = !S.useDryer || S.dryMin <= DRY_MIN;
+    $('#dry-plus').disabled = !S.useDryer || S.dryMin >= DRY_MAX;
+    $('#move').disabled = !S.useDryer;
+
+    S.recs = recommend(now, S, S.blocked);
+    if (S.sel >= S.recs.length) S.sel = 0;
+    const box = $('#recs');
+    const kids = [nowCard()];
+    if (!S.recs.length) {
+      kids.push(el('div', { class: 'empty', text: t('emptyRecs', { x: inText(sh.end) }) }));
+    } else {
+      const short = list('days'), full = list('full');
+      S.recs.forEach((r, i) => {
+        const lvl = levelOf(r.score);
+        const when = r.off === 0 ? t('today') : r.off === 1 ? t('tomorrow', { day: short[r.d] }) : full[r.d];
+        const minsAway = r.off * 1440 + r.start - (now.h * 60 + now.m);
+        const a = Math.round(r.bw * 100);
+        const arrive = r.bd == null ? t('arriveW', { a }) : t('arriveWD', { a, b: Math.round(r.bd * 100) });
+        const b = el('button', { class: 'rec-card', type: 'button', 'aria-pressed': i === S.sel ? 'true' : 'false' },
+          el('span', { class: 'rk', text: String(i + 1) }),
+          el('span', { class: 'rec-body' },
+            el('span', { class: 't', text: t('recTitle', { when, from: clock(r.start), to: clock(r.end) }) }),
+            el('span', { class: 's', text: t('startsIn', { x: inText(minsAway) }) }),
+            bar(), steps(r.start),
+            el('span', { class: 'l' }, el('i', { class: 'sw', style: 'background:var(--h' + lvl + ')' }), arrive)));
+        b.addEventListener('click', () => { S.sel = i; renderRecs(); });
+        kids.push(b);
+      });
+    }
+    box.replaceChildren(...kids.filter(Boolean));
+    paintGrid();
+  }
+
+  function setCell(k, on) { if (on) S.blocked.add(k); else S.blocked.delete(k); }
+  function wireGrid() {
+    const grid = $('#grid');
+    const tip = $('#tip');
+    let paint = null, mouseHandled = false;
+
+    grid.addEventListener('pointerdown', e => {
+      const c = e.target.closest('.cell');
+      if (!c || e.pointerType !== 'mouse') return;
+      e.preventDefault();
+      mouseHandled = true;
+      paint = !S.blocked.has(c.dataset.k);
+      setCell(c.dataset.k, paint);
+      renderRecs();
+    });
+    grid.addEventListener('pointerover', e => {
+      const c = e.target.closest('.cell');
+      if (!c) return;
+      if (paint !== null && e.pointerType === 'mouse') { setCell(c.dataset.k, paint); renderRecs(); }
+      showTip(c);
+    });
+    grid.addEventListener('pointerout', e => { if (e.target.closest('.cell')) tip.hidden = true; });
+    grid.addEventListener('focusin', e => { const c = e.target.closest('.cell'); if (c) showTip(c); });
+    grid.addEventListener('focusout', () => { tip.hidden = true; });
+    window.addEventListener('pointerup', () => { if (paint !== null) { paint = null; saveTimetable(); } });
+    grid.addEventListener('click', e => {
+      const c = e.target.closest('.cell');
+      if (!c) return;
+      if (mouseHandled) { mouseHandled = false; return; }   // mouse already handled on pointerdown
+      setCell(c.dataset.k, !S.blocked.has(c.dataset.k));
+      saveTimetable(); renderRecs();
+    });
+
+    function showTip(c) {
+      const d = +c.dataset.d, h = +c.dataset.h, v = typicalBusy(d, h), blocked = S.blocked.has(c.dataset.k);
+      tip.replaceChildren(
+        el('strong', { text: t('tipRange', { day: list('full')[d], from: pad(h) + ':00', to: pad(h + 1) + ':00' }) }), el('br'),
+        document.createTextNode(blocked ? t('tipBlk') : t('tipLevel', { lvl: levelName(levelOf(v)), pct: Math.round(v * 100) })));
+      tip.hidden = false;
+      const r = c.getBoundingClientRect(), tr = tip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(window.innerWidth - tr.width - 8, r.left + r.width / 2 - tr.width / 2));
+      const top = r.top - tr.height - 8 < 8 ? r.bottom + 8 : r.top - tr.height - 8;
+      tip.style.left = left + 'px'; tip.style.top = top + 'px';
+    }
+  }
+
+  /* ---------- language ---------- */
+  function applyLang() {
+    document.documentElement.lang = lang === 'zh' ? 'zh-Hans' : 'en';
+    document.title = t('title');
+    document.querySelectorAll('[data-i18n]').forEach(n => { n.textContent = t(n.dataset.i18n); });
+    document.querySelectorAll('[data-i18n-aria]').forEach(n => n.setAttribute('aria-label', t(n.dataset.i18nAria)));
+    $('#lang-en').setAttribute('aria-pressed', lang === 'en' ? 'true' : 'false');
+    $('#lang-zh').setAttribute('aria-pressed', lang === 'zh' ? 'true' : 'false');
+    const hall = $('#hall');
+    const keepHall = hall.value || String(S.hall);
+    hall.replaceChildren(...HALLS.map(n => el('option', { value: n, text: t('hallOpt', { n }) })));
+    hall.value = keepHall;
+    const mv = $('#move');
+    const keepMove = mv.value || String(S.moveMin);
+    mv.replaceChildren(...MOVE_CHOICES.map(n => el('option', { value: n, text: t('fMin', { n }) })));
+    mv.value = keepMove;
+    buildGrid();
+    renderRecs();
+    if (S.raw.length) renderNow();
+  }
+  function setLang(next) {
+    if (next === lang) return;
+    lang = next;
+    try { localStorage.setItem(LANG_KEY, lang); } catch (e) { /* ignore */ }
+    applyLang();
+  }
+
+  /* ---------- tabs + wiring ---------- */
+  function showTab(name) {
+    S.tab = name === 'plan' ? 'plan' : 'now';
+    for (const k of ['now', 'plan']) {
+      const on = k === S.tab;
+      $('#panel-' + k).hidden = !on;
+      const b = $('#tab-' + k);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    }
+    if (S.tab === 'plan') renderRecs();
+  }
+  function onPlanChange() { S.sel = 0; savePrefs(); renderRecs(); }
+  function init() {
+    S.blocked = loadTimetable() || sampleTimetable();
+    loadPrefs();
+    wireGrid();
+    applyLang();
+    $('#hall').value = String(S.hall);
+    $('#move').value = String(S.moveMin);
+    $('#hall').addEventListener('change', () => { S.hall = +$('#hall').value; load(); });
+    $('#refresh').addEventListener('click', load);
+    $('#tryLive').addEventListener('click', () => { S.source = 'live'; load(); });
+    $('#lang-en').addEventListener('click', () => setLang('en'));
+    $('#lang-zh').addEventListener('click', () => setLang('zh'));
+
+    $('#dry-minus').addEventListener('click', () => { S.dryMin = Math.max(DRY_MIN, S.dryMin - DRY_STEP); onPlanChange(); });
+    $('#dry-plus').addEventListener('click', () => { S.dryMin = Math.min(DRY_MAX, S.dryMin + DRY_STEP); onPlanChange(); });
+    $('#use-dry').addEventListener('change', e => { S.useDryer = e.target.checked; onPlanChange(); });
+    $('#move').addEventListener('change', e => { S.moveMin = +e.target.value; onPlanChange(); });
+    $('#sample').addEventListener('click', () => { S.blocked = sampleTimetable(); saveTimetable(); renderRecs(); });
+    $('#clear').addEventListener('click', () => { S.blocked = new Set(); saveTimetable(); renderRecs(); });
+
+    const tabs = [$('#tab-now'), $('#tab-plan')];
+    tabs.forEach((b, i) => {
+      b.addEventListener('click', () => { location.hash = i ? 'plan' : 'now'; showTab(i ? 'plan' : 'now'); });
+      b.addEventListener('keydown', e => {
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const j = 1 - i; tabs[j].focus(); tabs[j].click(); }
+      });
+    });
+    window.addEventListener('hashchange', () => showTab(location.hash.slice(1)));
+    showTab(location.hash.slice(1));
+
+    // one clock: refresh stamp every second, poll on the interval, and stay quiet while hidden
+    setInterval(() => {
+      if (document.hidden) return;
+      renderStamp();
+      if (Date.now() - S.fetchedAt >= REFRESH_MS) load();
+      const m = hkNow().m;
+      if (m !== S.lastMinute) { S.lastMinute = m; if (S.tab === 'plan') renderRecs(); }
+    }, 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - S.fetchedAt >= REFRESH_MS) load(); });
+
+    load();
+  }
+
+  window.LaundryPlanner = { recommend, shapeOf, busyAt, typicalBusy, parseMachine, parseTime, demoData, clock, STR, setLang, WASH_MIN, DRY_STEP, DRY_MIN, DRY_MAX };   // handy for console experiments
+  init();
+})();
+</script>
+
+</body>
+</html>
